@@ -42,7 +42,41 @@ constant or any declared variable contains NaN or infinite values. It is a
 warning when a binary target is rarer than `min_prevalence`, when an allowed
 size is never drawn, or when `reject` discards more than `max_rejection_rate`.
 
-## 4. Imports
+## 4. Token grid
+
+A task with R rows and E entities is laid out on (R + 1) x (E + 1) tokens:
+
+| Tokens | Variables |
+|---|---|
+| `[:R, :E]` | `cell` |
+| `[:R, E]` | `row` |
+| `[R, :E]` | `entity` |
+| `[R, E]` | `global` |
+
+Each variable has its own channel. Invariants, all tested:
+
+- Padding rows or entities, with any content, does not change the outputs at
+  real positions.
+- Permuting entities permutes the outputs. The same holds for rows unless
+  `ordered_rows=True`.
+- Targets are generated jointly. Draw i of one target belongs to draw i of
+  every other target.
+
+## 5. Bundle
+
+A directory with `model.safetensors` and `spec.json`. The spec holds variable
+names, kinds, normalisation statistics, the model configuration, a
+fingerprint of the prior and `format_version`. Loading a bundle with another
+format version is an error.
+
+## 6. Sampling
+
+`PFN.sample(batch)` returns one array per target with shape `(B, draws, ...)`
+in natural units, zero at padded positions. Noise is generated on the CPU from
+`seed`, so the same seed gives the same draws on every device up to
+floating-point differences.
+
+## 7. Imports
 
 `import pymc_pfn` imports numpy only. PyMC is imported when a model is first
-built.
+built, torch when `fit`, `PFN`, `Posterior` or `ModelConfig` is first used.

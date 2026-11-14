@@ -7,6 +7,8 @@ when a model is first built, so loading this module stays cheap.
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import itertools
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -244,6 +246,22 @@ class Prior:
         if prefetch <= 0:
             return generate()
         return _prefetch(generate(), prefetch)
+
+    def fingerprint(self) -> str | None:
+        """Hash of the builder source and declarations, stored in bundles."""
+        try:
+            source = inspect.getsource(self.build)
+        except (OSError, TypeError):
+            return None
+        declared = (
+            self.sizes,
+            self.observed,
+            self.targets,
+            self.row_dim,
+            self.entity_dim,
+            self.prefix_rows,
+        )
+        return hashlib.sha256(f"{source}\n{declared!r}".encode()).hexdigest()[:16]
 
     def audit(self, n: int = 2000, seed: int = 0, **kwargs: Any):
         """Check that the prior emits what the network is supposed to learn."""

@@ -3,8 +3,9 @@
 Write the prior as a PyMC model. Get an amortized posterior network for that
 prior, with the evidence that it works and where it stops working.
 
-Status: milestone M1 of four. The prior interface, task generation and the
-support audit exist. There is no network yet.
+Status: milestone M2 of four. A network can be trained on a prior, saved and
+used for posterior draws. The evaluation harness (baselines, calibration,
+stress tests) is milestone M3, so no trained network should be trusted yet.
 
 ## What works today
 
@@ -34,11 +35,42 @@ prior = pfn.Prior(
 
 print(prior.audit(n=2000))  # is there anything to learn?
 batch = prior.sample(256, seed=0)  # padded, masked TaskBatch
-for batch in prior.stream(batch_size=256, prefetch=4):
-    ...
+
+net = pfn.fit(prior, pfn.FitConfig(steps=20_000), out="runs/demo")
+net = pfn.PFN.load("runs/demo/bundle")
+
+post = net.predict({"x": x_obs, "y": y_obs}, draws=1000)
+post["beta"]  # (draws, n_groups), joint draws across all targets
+post.to_datatree()  # ArviZ-compatible
 ```
 
 `examples/hierarchical_regression.py` runs this end to end.
+
+A 3,000-step run of that example (about nine minutes on an Apple M-series
+laptop, 2026-11-14) gave on 100 fresh tasks: RMSE of the posterior mean of
+`beta` 0.231, OLS 0.219, prior mean 1.090, and 84.1% coverage of the 80%
+interval. This is one seed and a sanity check, not a benchmark: the network
+is close to OLS and not better, and the intervals are slightly too wide.
+
+## How it works
+
+A task with R rows and E entities becomes a grid of (R + 1) x (E + 1) tokens.
+Cell variables live in the R x E block, row variables in the extra column,
+entity variables in the extra row and global variables in the corner. Each
+block attends along rows, then along entities. An encoder reads the observed
+variables once. A denoiser predicts the flow-matching velocity of all targets
+jointly, so the draws are joint posterior samples.
+
+The network handles any number of rows and entities and is equivariant to
+their order. Set `ModelConfig(ordered_rows=True)` for time series.
+
+Known limits of M2:
+
+- Variables are standardised with fixed statistics from the prior. Data on a
+  very different scale than the prior is out of support, and nothing warns
+  about it yet.
+- All observed variables are fully visible. There is no forecasting split.
+- Checkpoint selection uses the holdout flow loss, not a proper scoring rule.
 
 ## Rules of this repository
 
@@ -60,7 +92,7 @@ The data contract is in [docs/CONTRACTS.md](docs/CONTRACTS.md).
 | Step | Deliverable | State |
 |---|---|---|
 | M1 | `Prior`, task generation, audit | done |
-| M2 | cell-grid encoder, flow-matching head, `fit`, bundle | open |
+| M2 | cell-grid encoder, flow-matching head, `fit`, bundle | done |
 | M3 | `evaluate`: baselines, calibration, stress families, invariance | open |
 | M4 | two-channel MMM specialist example, docs | open |
 
