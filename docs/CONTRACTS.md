@@ -76,7 +76,40 @@ in natural units, zero at padded positions. Noise is generated on the CPU from
 `seed`, so the same seed gives the same draws on every device up to
 floating-point differences.
 
-## 7. Imports
+## 7. Evaluation
+
+`evaluate(net, prior)` returns a `Report` and can write it as JSON. It draws
+fresh tasks with a seed stream that training never uses.
+
+| Section | Content |
+|---|---|
+| `accuracy` | RMSE of the posterior mean, CRPS and interval coverage per target and method |
+| `sbc` | rank histogram and chi-square p-value, one random real element per task |
+| `sampler` | coverage and posterior sd for the chosen solver setting and a grid |
+| `stress` | accuracy on other priors, plus how far their inputs are from the training scale |
+| `symmetry` | shift of the posterior under transformations the user declares |
+| `reference` | NUTS on the same PyMC model: mean shift, sd ratio, CRPS of both |
+| `flags` | every threshold that was crossed, as text |
+
+Rules:
+
+- `prior_only` is always among the methods. It draws from the prior marginal
+  of each target and ignores the data.
+- Baselines receive the batch without targets. They return point estimates
+  `(B, ...)` or draws `(B, D, ...)` for any subset of the targets. For a
+  point estimate, CRPS equals the mean absolute error and coverage is empty.
+- All metrics are means over real values. Padding never enters.
+- A NUTS fit counts only if it has no divergences and split R-hat below 1.01
+  for every target value. Excluded fits are counted in the report.
+- Scale and shift invariance are not asserted. A proper prior is not
+  invariant to them, and the network standardises with fixed statistics. A
+  symmetry is checked only when the user states it with `Symmetry`.
+- A report without flags is not a proof. It says that the checks which were
+  run did not fail.
+
+## 8. Imports
 
 `import pymc_pfn` imports numpy only. PyMC is imported when a model is first
 built, torch when `fit`, `PFN`, `Posterior` or `ModelConfig` is first used.
+`evaluate` needs
+torch, and PyMC only for the NUTS reference and for drawing tasks.

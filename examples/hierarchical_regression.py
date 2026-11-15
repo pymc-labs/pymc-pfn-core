@@ -1,16 +1,19 @@
 """Example 1: hierarchical regression with a variable number of groups.
 
-Audit the prior, then train a network and check it on fresh tasks:
+Train a network and write the evaluation report:
 
     uv run python examples/hierarchical_regression.py --steps 3000 --out runs/hier
 
-This is a quick sanity check, not the evaluation harness of milestone M3.
+Evaluate an existing bundle, with NUTS as the reference on 20 tasks:
+
+    uv run python examples/hierarchical_regression.py --out runs/hier --reference 20
 """
 
 from __future__ import annotations
 
 import argparse
-import time
+from functools import partial
+from pathlib import Path
 
 import numpy as np
 import pymc as pm
@@ -18,21 +21,33 @@ import pymc as pm
 import pymc_pfn as pfn
 
 
-def model(n_obs: int, n_groups: int) -> pm.Model:
+def model(n_obs: int, n_groups: int, family: str = "prior") -> pm.Model:
+    """``family`` selects the training prior or one of the stress families."""
     coords = {"obs": range(n_obs), "group": range(n_groups)}
     with pm.Model(coords=coords) as m:
-        x = pm.Normal("x", dims=("obs", "group"))
-        tau = pm.HalfNormal("tau")
+        if family == "collinear":  # every column shares one common factor
+            own = pm.Normal("own", dims=("obs", "group"))
+            common = pm.Normal("common", dims="obs")
+            x = pm.Deterministic(
+                "x", 0.5 * own + 0.87 * common[:, None], dims=("obs", "group")
+            )
+        else:
+            x = pm.Normal("x", dims=("obs", "group"))
+        tau = pm.HalfNormal("tau", 5.0 if family == "large_effects" else 1.0)
         beta = pm.Normal("beta", 0.0, tau, dims="group")
         sigma = pm.HalfNormal("sigma")
         effect = pm.Deterministic("effect", x * beta, dims=("obs", "group"))
-        pm.Normal("y", effect.sum(axis=-1), sigma, dims="obs")
+        mu = effect.sum(axis=-1)
+        if family == "heavy_tails":
+            pm.StudentT("y", nu=2.0, mu=mu, sigma=sigma, dims="obs")
+        else:
+            pm.Normal("y", mu, sigma, dims="obs")
     return m
 
 
-def make_prior() -> pfn.Prior:
+def make_prior(family: str = "prior") -> pfn.Prior:
     return pfn.Prior(
-        model,
+        model if family == "prior" else partial(model, family=family),
         sizes={"n_obs": [16, 32, 64], "n_groups": range(2, 9)},
         observed=["x", "y"],
         targets=["beta", "effect"],
@@ -42,53 +57,56 @@ def make_prior() -> pfn.Prior:
     )
 
 
-def check(net: pfn.PFN, prior: pfn.Prior, n_tasks: int = 100, draws: int = 64) -> None:
-    """Compare posterior means for beta with OLS and with the prior mean."""
-    test = prior.sample(n_tasks, seed=20_261_114)
-    posterior = net.sample(test, draws=draws, seed=0, steps=10)["beta"]
-    truth, mask = test.targets["beta"], test.mask("beta")
+def ols(batch: pfn.TaskBatch) -> dict[str, np.ndarray]:
+    beta = np.zeros(batch.entity_mask.shape, dtype=np.float32)
+    for i in range(len(batch)):
+        r, e = int(batch.row_mask[i].sum()), int(batch.entity_mask[i].sum())
+        x, y = batch.observed["x"][i, :r, :e], batch.observed["y"][i, :r]
+        beta[i, :e] = np.linalg.lstsq(x, y)[0]
+    return {"beta": beta, "effect": batch.observed["x"] * beta[:, None, :]}
 
-    ols = np.zeros_like(truth)
-    for i, size in enumerate(test.sizes):
-        r, e = size["n_obs"], size["n_groups"]
-        ols[i, :e] = np.linalg.lstsq(
-            test.observed["x"][i, :r, :e], test.observed["y"][i, :r]
-        )[0]
 
-    def rmse(estimate: np.ndarray) -> float:
-        return float(np.sqrt(((estimate - truth)[mask] ** 2).mean()))
-
-    low, high = np.quantile(posterior, [0.1, 0.9], axis=1)
-    coverage = float(((truth >= low) & (truth <= high))[mask].mean())
-    print(
-        f"beta RMSE  network {rmse(posterior.mean(axis=1)):.3f}   OLS {rmse(ols):.3f}   "
-        f"prior mean {rmse(np.full_like(truth, net.spec.mean['beta'])):.3f}"
-    )
-    print(
-        f"80% interval coverage for beta: {coverage:.1%} over {int(mask.sum())} coefficients"
-    )
+SIGN_FLIP = pfn.Symmetry(
+    "sign flip of x",
+    observed=lambda o: {**o, "x": -o["x"]},
+    targets=lambda t: {**t, "beta": -t["beta"]},
+)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--steps", type=int, default=0, help="0 loads <out>/bundle")
+    parser.add_argument("--out", default="runs/hier")
+    parser.add_argument("--tasks", type=int, default=200)
     parser.add_argument(
-        "--steps", type=int, default=0, help="training steps, 0 skips training"
+        "--reference", type=int, default=0, help="tasks fitted with NUTS"
     )
-    parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
     prior = make_prior()
-    print(prior.audit(n=2000).raise_if_failed())
-
-    start = time.perf_counter()
-    n = sum(len(batch) for _, batch in zip(range(20), prior.stream(batch_size=256)))
-    print(f"\nsampling throughput: {n / (time.perf_counter() - start):,.0f} tasks/s\n")
-
     if args.steps:
+        print(prior.audit(n=2000).raise_if_failed(), "\n")
         config = pfn.FitConfig(
             steps=args.steps,
             batch_size=32,
             eval_every=max(args.steps // 10, 1),
             model=pfn.ModelConfig(d_model=64, encoder_layers=3, decoder_layers=2),
         )
-        check(pfn.fit(prior, config, out=args.out), prior)
+        net = pfn.fit(prior, config, out=args.out)
+    else:
+        net = pfn.PFN.load(Path(args.out) / "bundle")
+
+    report = pfn.evaluate(
+        net,
+        prior,
+        n_tasks=args.tasks,
+        baselines={"ols": ols},
+        stress={
+            name: make_prior(name)
+            for name in ("heavy_tails", "large_effects", "collinear")
+        },
+        symmetries=[SIGN_FLIP],
+        reference_tasks=args.reference,
+        out=Path(args.out) / "report.json",
+    )
+    print(report)
