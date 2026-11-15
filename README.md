@@ -87,7 +87,7 @@ work for both.
 
 ## What the examples show
 
-Both examples train a small network (64 dimensions, 3 + 2 layers) on an
+The examples train a small network (64 dimensions, 3 + 2 layers) on an
 Apple M-series laptop and print the full report. Numbers are from one seed on
 2026-11-14, with 200 fresh tasks and 64 draws per task.
 
@@ -139,7 +139,23 @@ but its intervals for `f` are too wide, 95.7% for the narrowest third. On
 rough functions its noise estimate is badly overconfident (20% coverage), and
 on linear trends it loses to the baseline by a factor of three.
 
-Neither network is a finished model. The examples show that the report finds
+**`examples/ricker_simulator.py`**, 3,000 steps, about 20 minutes, a
+`Simulator` without PyMC and without a NUTS reference (2026-11-15):
+
+| target | RMSE network | RMSE prior only | 80% coverage | SBC p |
+|---|---|---|---|---|
+| `log_r` | 0.175 | 0.864 | 82.0% | 0.34 |
+| `sigma` | 0.120 | 0.231 | 85.0% | 0.08 |
+| `phi` | 0.739 | 4.772 | 84.5% | 0.96 |
+
+The network learns the growth rate and the observation scale well and the
+process noise only partly. No target fails SBC. Narrow posteriors of `sigma`
+and `phi` are too wide (88% and 91% coverage), the same pattern as in the
+regression example. There is no baseline besides the prior and no reference
+posterior, so this shows that the route works, not how close it is to the
+true posterior.
+
+No network here is a finished model. The examples show that the report finds
 the weak points: out-of-prior failure, solver shrinkage, and miscalibration
 that average coverage hides.
 
