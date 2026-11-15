@@ -12,12 +12,18 @@ __all__ = [
     "Posterior",
     "Prior",
     "PriorAuditError",
+    "Report",
+    "Symmetry",
     "TaskBatch",
     "concat",
+    "evaluate",
     "fit",
 ]
 
 _LAZY = {
+    "evaluate": "pymc_pfn.evaluation",
+    "Report": "pymc_pfn.evaluation",
+    "Symmetry": "pymc_pfn.evaluation",
     "fit": "pymc_pfn.training",
     "FitConfig": "pymc_pfn.training",
     "ModelConfig": "pymc_pfn.model",

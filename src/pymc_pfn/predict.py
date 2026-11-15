@@ -182,7 +182,7 @@ class PFN:
         batch: TaskBatch,
         draws: int = 100,
         seed: int = 0,
-        steps: int = 20,
+        steps: int = 10,
         method: str = "heun",
         token_budget: int = 200_000,
     ) -> dict[str, np.ndarray]:
