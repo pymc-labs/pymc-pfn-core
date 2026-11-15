@@ -1,9 +1,11 @@
 # pymc-pfn
 
-Write the prior as a PyMC model. Get an amortized posterior network for that
-prior, with the evidence that it works and where it stops working.
+Train an amortized posterior network on synthetic tasks, with the evidence
+that it works and where it stops working. The tasks come from any simulator.
+A PyMC model is the preferred one: the library reads the variable layout
+from the model and checks the network against NUTS on the same model.
 
-Status: milestone M3 of four. A network can be trained on a prior, saved,
+Status: milestone M3 of four. A network can be trained on a task source, saved,
 used for posterior draws and evaluated. A network counts as usable only with
 its evaluation report, including the flags.
 
@@ -53,6 +55,35 @@ report = pfn.evaluate(
 )
 print(report)  # tables plus report.flags
 ```
+
+### Any simulator
+
+A task source without PyMC is a function that returns one task. The kinds
+are declared by hand, everything else works the same.
+
+```python
+def simulate(rng, n_obs, n_groups):
+    x = rng.normal(size=(n_obs, n_groups))
+    beta = rng.normal(size=n_groups)
+    y = x @ beta + rng.normal(size=n_obs)
+    return {"x": x, "y": y, "beta": beta}
+
+
+source = pfn.Simulator(
+    simulate,
+    sizes={"n_obs": [32, 64, 128], "n_groups": range(2, 9)},
+    observed=["x", "y"],
+    targets=["beta"],
+    kinds={"x": "cell", "y": "row", "beta": "entity"},
+)
+net = pfn.fit(source, pfn.FitConfig(steps=20_000), out="runs/demo")
+```
+
+What the PyMC route adds: kinds and axis order come from the model dims,
+`prefix_rows` saves compilations, and `evaluate(reference_tasks=...)` runs
+NUTS on the same model. A `Simulator` has no likelihood, so its report has
+no NUTS reference. SBC, coverage, baselines, stress families and symmetries
+work for both.
 
 ## What the examples show
 
@@ -135,6 +166,9 @@ Known limits:
   training helps slowly. Per-task scaling and a wider network are untested.
 - Task draws are reproducible only on a fresh `Prior`. Evaluate with a new
   `Prior` object, not the one used for training, to get the same tasks again.
+  A `Simulator` does not have this limit.
+- A `Simulator` draws one task per Python call. Vectorise inside the function
+  if task generation limits training speed.
 - Evaluation is slow on a laptop: the default report (200 tasks, 64 draws,
   three stress families) takes several minutes on Apple silicon.
 - The NUTS reference refits the model per task and is practical only for
@@ -148,8 +182,8 @@ Known limits:
 2. No domain features in the package. Marketing, finance and other domains
    are consumers and live in their own repositories or in `examples/`.
 3. Experiments live outside the package, and no script imports another script.
-4. Importing `pymc_pfn` must not import PyMC. PyMC is needed to generate
-   tasks, not to load or use a network.
+4. Importing `pymc_pfn` must not import PyMC. PyMC is needed for `Prior`
+   and the NUTS reference, not for a `Simulator` or to load or use a network.
 5. Every loss and metric takes the masks of `TaskBatch`. Padded values are
    never data.
 
@@ -159,7 +193,7 @@ The data contract is in [docs/CONTRACTS.md](docs/CONTRACTS.md).
 
 | Step | Deliverable | State |
 |---|---|---|
-| M1 | `Prior`, task generation, audit | done |
+| M1 | `Prior`, `Simulator`, task generation, audit | done |
 | M2 | cell-grid encoder, flow-matching head, `fit`, bundle | done |
 | M3 | `evaluate`: baselines, calibration, sampler check, stress families, symmetries, NUTS reference | done |
 | M4 | two-channel MMM specialist example, docs | open |

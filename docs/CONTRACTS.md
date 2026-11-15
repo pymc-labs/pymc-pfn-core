@@ -24,20 +24,36 @@ Invariants:
 
 - Padded values are zero and carry no information. Use `batch.mask(name)`.
 - All variables of one task come from one joint draw of the model.
-- A fresh `Prior` with the same seed returns the same batch.
+- A fresh `Prior` with the same seed returns the same batch. A `Simulator`
+  returns the same batch for the same seed on a used object too.
 
-## 2. Prior
+## 2. Task sources
+
+`TaskSource` is the interface `fit`, `evaluate` and the audit rely on:
+`sample(n, seed)`, `stream(batch_size, seed)`, `fingerprint()`, `sizes`,
+`observed`, `targets`, `n_drawn` and `n_rejected`. A subclass implements
+`_draw(n, sizes, rng)` and `_identity()`.
+
+`Simulator`:
+
+- `simulate(rng, **sizes)` returns one task as a dict of arrays, cell
+  variables in (rows, entities) order. All randomness comes from `rng`.
+- `kinds` names the kind of every observed and target variable. Shapes are
+  checked against it, and they may depend on the sizes only.
+- There is no NUTS reference. `evaluate(reference_tasks > 0)` raises.
+
+`Prior`, the PyMC adapter:
 
 - Every axis of an observed or target variable is named by `row_dim` or
   `entity_dim`. Other dims are rejected with an error.
 - `prefix_rows` is a promise by the user that the first k rows of a draw are a
   valid draw with k rows. The library does not check it.
-- `reject` changes the effective prior. `Prior.n_drawn` and `Prior.n_rejected`
-  count it, and the audit reports the rate.
+- `reject` changes the effective prior for every source. `n_drawn` and
+  `n_rejected` count it, and the audit reports the rate.
 
 ## 3. Audit
 
-`Prior.audit()` returns an `AuditReport`. It is an error when a target is
+`audit()` of a task source returns an `AuditReport`. It is an error when a target is
 constant or any declared variable contains NaN or infinite values. It is a
 warning when a binary target is rarer than `min_prevalence`, when an allowed
 size is never drawn, or when `reject` discards more than `max_rejection_rate`.
@@ -118,4 +134,5 @@ Rules:
 `import pymc_pfn` imports numpy only. PyMC is imported when a model is first
 built, torch when `fit`, `PFN`, `Posterior` or `ModelConfig` is first used.
 `evaluate` needs
-torch, and PyMC only for the NUTS reference and for drawing tasks.
+torch, and PyMC only for the NUTS reference and for drawing tasks from a
+`Prior`. A `Simulator` never imports PyMC.
