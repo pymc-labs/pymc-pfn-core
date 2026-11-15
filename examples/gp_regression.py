@@ -3,7 +3,10 @@
 There is one row per observation and no entity axis. The targets are the
 latent function at the observed inputs, the length scale and the noise.
 
-    uv run python examples/gp_regression.py --steps 3000 --out runs/gp --reference 8
+    uv run python examples/gp_regression.py --steps 3000 --out runs/gp
+
+NUTS on the latent function is slow (minutes per task), so the reference is
+off by default here. Enable it with ``--reference N``.
 """
 
 from __future__ import annotations
