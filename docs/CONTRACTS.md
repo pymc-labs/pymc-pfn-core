@@ -85,6 +85,7 @@ fresh tasks with a seed stream that training never uses.
 |---|---|
 | `accuracy` | RMSE of the posterior mean, CRPS and interval coverage per target and method |
 | `sbc` | rank histogram and chi-square p-value, one random real element per task |
+| `conditional` | 80% coverage within thirds of the network's own posterior sd |
 | `sampler` | coverage and posterior sd for the chosen solver setting and a grid |
 | `stress` | accuracy on other priors, plus how far their inputs are from the training scale |
 | `symmetry` | shift of the posterior under transformations the user declares |
@@ -99,6 +100,11 @@ Rules:
   `(B, ...)` or draws `(B, D, ...)` for any subset of the targets. For a
   point estimate, CRPS equals the mean absolute error and coverage is empty.
 - All metrics are means over real values. Padding never enters.
+- Intervals use Weibull quantile positions, so a perfect sampler has the
+  nominal expected coverage at any number of draws.
+- Coverage by width takes the sd from one half of the draws and the interval
+  from the other half. Average coverage can hide posteriors that are too wide
+  where they should be narrow and too narrow where they should be wide.
 - A NUTS fit counts only if it has no divergences and split R-hat below 1.01
   for every target value. Excluded fits are counted in the report.
 - Scale and shift invariance are not asserted. A proper prior is not

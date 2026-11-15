@@ -39,6 +39,8 @@ DEFAULT_SAMPLER_GRID = (("euler", 8), ("heun", 40))
 
 # Flag thresholds.
 COVERAGE_TOLERANCE = 0.05
+CONDITIONAL_TOLERANCE = 0.08
+WIDTH_BINS = ("narrowest", "middle", "widest")
 SBC_ALPHA = 0.01
 BASELINE_MARGIN = 1.05
 SAMPLER_SD_TOLERANCE = 0.05
@@ -67,6 +69,7 @@ class Report:
         str, dict[str, dict[str, float | None]]
     ]  # method -> target -> metric
     sbc: dict[str, dict[str, Any]]
+    conditional: dict[str, dict[str, list[float]]] = field(default_factory=dict)
     sampler: list[dict[str, Any]] = field(default_factory=list)
     stress: dict[str, dict[str, Any]] = field(default_factory=dict)
     symmetry: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -93,6 +96,12 @@ class Report:
             *[
                 f"  {name:<14} p = {s['p_value']:.3f}   {s['counts']}"
                 for name, s in self.sbc.items()
+            ],
+            "",
+            "80% coverage by posterior width (narrowest, middle, widest third)",
+            *[
+                f"  {name:<14} " + "   ".join(f"{c:.3f}" for c in s["cov80"])
+                for name, s in self.conditional.items()
             ],
         ]
         if self.sampler:
@@ -169,6 +178,19 @@ def crps(draws: np.ndarray, truth: np.ndarray) -> np.ndarray:
     return np.abs(draws - truth[:, None]).mean(axis=1) - spread
 
 
+def interval(draws: np.ndarray, level: float) -> tuple[np.ndarray, np.ndarray]:
+    """Central interval over the draw axis whose expected coverage is ``level``.
+
+    The default quantile rule undercovers with few draws: at 64 draws a
+    nominal 80% interval covers 77.5% even for a perfect sampler. Weibull
+    positions, p (D + 1), remove that bias.
+    """
+    low, high = np.quantile(
+        draws, [(1 - level) / 2, (1 + level) / 2], axis=1, method="weibull"
+    )
+    return low, high
+
+
 def score(
     estimate: np.ndarray, truth: np.ndarray, mask: np.ndarray
 ) -> dict[str, float | None]:
@@ -185,11 +207,33 @@ def score(
         "crps": float(crps(estimate, truth)[mask].mean()),
     }
     for level in LEVELS:
-        low, high = np.quantile(estimate, [(1 - level) / 2, (1 + level) / 2], axis=1)
+        low, high = interval(estimate, level)
         out[f"cov{round(level * 100)}"] = float(
             ((truth >= low) & (truth <= high))[mask].mean()
         )
     return out
+
+
+def coverage_by_width(
+    draws: np.ndarray, truth: np.ndarray, mask: np.ndarray
+) -> dict[str, list[float]]:
+    """80% coverage within thirds of the network's own posterior sd.
+
+    Average coverage can look right while narrow posteriors are too wide and
+    wide ones too narrow. Splitting by width shows that without a reference.
+    """
+    # Width from one half of the draws, interval from the other. Using the same
+    # draws for both would put underestimated intervals into the narrow bin.
+    sd = draws[:, 0::2].std(axis=1)[mask]
+    low, high = interval(draws[:, 1::2], 0.8)
+    inside = ((truth >= low) & (truth <= high))[mask]
+    edges = np.quantile(sd, [1 / 3, 2 / 3])
+    bins = np.digitize(sd, edges)
+    present = [b for b in range(3) if (bins == b).any()]
+    return {
+        "cov80": [float(inside[bins == b].mean()) for b in present],
+        "sd": [float(sd[bins == b].mean()) for b in present],
+    }
 
 
 def sbc(
@@ -536,6 +580,18 @@ def evaluate(
     batch, network, accuracy = run(prior, n_tasks, eval_seed)
     flags += _accuracy_flags(accuracy, "in prior")
 
+    conditional_section = {}
+    for name in net.spec.targets:
+        mask = _target_mask(batch, name, kinds)
+        result = coverage_by_width(network[name], batch.targets[name], mask)
+        conditional_section[name] = result
+        for label, cov in zip(WIDTH_BINS, result["cov80"]):
+            if abs(cov - 0.8) > CONDITIONAL_TOLERANCE:
+                flags.append(
+                    f"in prior: {name} 80% interval covers {cov:.1%} "
+                    f"for its {label} third of posteriors"
+                )
+
     sbc_section = {}
     for i, name in enumerate(net.spec.targets):
         result = sbc(
@@ -664,6 +720,7 @@ def evaluate(
         },
         accuracy=accuracy,
         sbc=sbc_section,
+        conditional=conditional_section,
         sampler=sampler_section,
         stress=stress_section,
         symmetry=symmetry_section,

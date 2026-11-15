@@ -6,7 +6,14 @@ import pytest
 from conftest import make_prior
 
 import pymc_pfn as pfn
-from pymc_pfn.evaluation import crps, nuts_posterior, sample_grouped, sbc, score
+from pymc_pfn.evaluation import (
+    coverage_by_width,
+    crps,
+    nuts_posterior,
+    sample_grouped,
+    sbc,
+    score,
+)
 
 
 def ols(batch: pfn.TaskBatch) -> dict[str, np.ndarray]:
@@ -71,6 +78,22 @@ def test_sbc_accepts_calibrated_and_rejects_overconfident_draws():
     assert sum(sbc(calibrated, truth, mask, seed=0)["counts"]) == 600
 
 
+def test_coverage_by_width_exposes_errors_that_cancel_on_average():
+    rng = np.random.default_rng(3)
+    true_sd = np.where(np.arange(3000) % 2 == 0, 0.1, 1.0)[:, None]
+    truth = true_sd * rng.normal(size=(3000, 1))
+    mask = np.ones_like(truth, dtype=bool)
+    honest = true_sd[:, None] * rng.normal(size=(3000, 200, 1))
+    result = coverage_by_width(honest, truth, mask)
+    assert all(abs(c - 0.8) < 0.04 for c in result["cov80"])
+    # Too wide where the posterior is narrow, too narrow where it is wide.
+    claimed = np.where(true_sd < 0.5, 0.3, 0.6)[:, None]
+    blurred = claimed * rng.normal(size=(3000, 200, 1))
+    result = coverage_by_width(blurred, truth, mask)
+    assert result["cov80"][0] > 0.95
+    assert result["cov80"][-1] < 0.65
+
+
 def test_sample_grouped_fills_real_positions_only(trained, prior):
     net, _ = trained
     batch = prior.sample(12, seed=3, group_size=3)
@@ -126,6 +149,8 @@ def test_report_has_every_section(report):
     assert set(result.accuracy["network"]) == {"beta", "effect", "sigma"}
     assert set(result.accuracy["ols"]) == {"beta"}
     assert set(result.sbc) == {"beta", "effect", "sigma"}
+    assert set(result.conditional) == {"beta", "effect", "sigma"}
+    assert len(result.conditional["beta"]["cov80"]) == 3
     assert [(s["method"], s["steps"]) for s in result.sampler] == [
         ("heun", 4),
         ("euler", 4),
