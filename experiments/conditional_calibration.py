@@ -75,12 +75,11 @@ def reference(n_tasks: int) -> None:
     np.savez(ROOT / "reference_nuts.npz", mean=mean, sd=sd, crps=score)
 
 
-def train(name: str, steps: int, d_model: int, ema: float) -> None:
+def train(name: str, steps: int, d_model: int) -> None:
     config = pfn.FitConfig(
         steps=steps,
         batch_size=32,
         eval_every=max(steps // 10, 1),
-        ema=ema,
         model=pfn.ModelConfig(d_model=d_model, encoder_layers=3, decoder_layers=2),
     )
     pfn.fit(make_prior(), config, out=ROOT / name)
@@ -124,11 +123,10 @@ if __name__ == "__main__":
     training.add_argument("--name", required=True)
     training.add_argument("--steps", type=int, default=6000)
     training.add_argument("--d-model", type=int, default=64)
-    training.add_argument("--ema", type=float, default=0.0)
     args = parser.parse_args()
     if args.command == "reference":
         reference(args.tasks)
     elif args.command == "train":
-        train(args.name, args.steps, args.d_model, args.ema)
+        train(args.name, args.steps, args.d_model)
     else:
         compare()

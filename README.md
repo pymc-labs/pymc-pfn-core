@@ -64,25 +64,29 @@ Apple M-series laptop and print the full report. Numbers are from one seed on
 
 | `beta` | RMSE | CRPS | 80% coverage |
 |---|---|---|---|
-| network, in prior | 0.273 | 0.131 | 79.4% |
-| OLS, in prior | 0.298 | 0.177 | |
-| prior only, in prior | 1.049 | 0.530 | 77.2% |
-| network, heavy-tailed noise | 0.383 | 0.189 | 71.5% |
+| network, in prior | 0.289 | 0.133 | 81.0% |
+| OLS, in prior | 0.284 | 0.166 | |
+| prior only, in prior | 0.989 | 0.507 | 80.6% |
+| network, heavy-tailed noise | 0.383 | 0.189 | 73.5% |
 | OLS, heavy-tailed noise | 0.608 | 0.330 | |
-| network, coefficients five times larger | 2.064 | 0.754 | 61.8% |
+| network, coefficients five times larger | 2.064 | 0.754 | 63.6% |
 | OLS, coefficients five times larger | 0.224 | 0.141 | |
-| network, collinear inputs | 0.543 | 0.289 | 53.8% |
+| network, collinear inputs | 0.543 | 0.289 | 55.8% |
 | OLS, collinear inputs | 0.392 | 0.252 | |
 
-- In the prior the network beats OLS and `beta` passes SBC (p = 0.75).
+- In the prior the posterior mean is on par with OLS. On another sample of
+  200 tasks the network was ahead (0.273 against 0.298), so the difference
+  is within task-sampling noise. `beta` passes SBC (p = 0.15).
+- Average coverage hides a conditional error. Split by the network's own
+  posterior width, the 80% interval covers 89%, 84% and 73% for the
+  narrowest, middle and widest third.
+- Against NUTS on 40 fixed tasks (26 passed the convergence screen), the
+  posterior sd is 2.1 times too wide for narrow posteriors and 1.07 times
+  for wide ones. Training twice as long reduces 2.1 to 1.8. See
+  [experiments/conditional_calibration.md](experiments/conditional_calibration.md).
 - Outside the prior it fails, and the report says so: with larger
   coefficients it is nine times worse than OLS, with collinear inputs its 80%
-  interval covers 54%.
-- Against NUTS (7 of 12 fits passed the convergence screen) the posterior sd
-  of `beta` is 1.5 times too wide at the median and CRPS is 0.206 against
-  0.140. Task by task, the network is two to ten times too wide where the
-  NUTS sd is below 0.1 and about right or too narrow where it is above 0.3.
-  Average coverage looks calibrated only because the two errors cancel.
+  interval covers 56%.
 - `effect` is too wide in the prior (87.4% coverage, fails SBC).
 - Euler with 8 steps shrinks the posterior sd by 13% against Heun with 40
   steps. Heun with 10 steps, the default, is within 5%.
@@ -92,17 +96,17 @@ reference (minutes per task for the latent function):
 
 | latent `f` | RMSE | CRPS | 80% coverage |
 |---|---|---|---|
-| network, in prior | 0.125 | 0.060 | 85.2% |
-| exact GP with fixed hyperparameters, in prior | 0.133 | 0.068 | 68.4% |
-| network, rough (Matern 1/2) functions | 0.341 | 0.197 | 51.9% |
-| exact GP with fixed hyperparameters, rough | 0.389 | 0.261 | 22.4% |
-| network, linear trend | 0.462 | 0.141 | 79.3% |
-| exact GP with fixed hyperparameters, linear trend | 0.135 | 0.068 | 69.2% |
+| network, in prior | 0.125 | 0.060 | 87.3% |
+| exact GP with fixed hyperparameters, in prior | 0.133 | 0.068 | 70.1% |
+| network, rough (Matern 1/2) functions | 0.341 | 0.197 | 54.3% |
+| exact GP with fixed hyperparameters, rough | 0.389 | 0.261 | 23.7% |
+| network, linear trend | 0.462 | 0.141 | 80.8% |
+| exact GP with fixed hyperparameters, linear trend | 0.135 | 0.068 | 71.2% |
 
 In the prior the network is slightly better than the fixed-hyperparameter GP
-but its intervals for `f` are too wide. On rough functions its noise estimate
-is badly overconfident (18.5% coverage), and on linear trends it loses to the
-baseline by a factor of three.
+but its intervals for `f` are too wide, 95.7% for the narrowest third. On
+rough functions its noise estimate is badly overconfident (20% coverage), and
+on linear trends it loses to the baseline by a factor of three.
 
 Neither network is a finished model. The examples show that the report finds
 the weak points: out-of-prior failure, solver shrinkage, and miscalibration
@@ -127,6 +131,10 @@ Known limits:
   the input scale of every stress family, `predict` does not warn yet.
 - All observed variables are fully visible. There is no forecasting split.
 - Checkpoint selection uses the holdout flow loss, not a proper scoring rule.
+- Narrow posteriors come out too wide, see the experiment above. Longer
+  training helps slowly. Per-task scaling and a wider network are untested.
+- Task draws are reproducible only on a fresh `Prior`. Evaluate with a new
+  `Prior` object, not the one used for training, to get the same tasks again.
 - Evaluation is slow on a laptop: the default report (200 tasks, 64 draws,
   three stress families) takes several minutes on Apple silicon.
 - The NUTS reference refits the model per task and is practical only for

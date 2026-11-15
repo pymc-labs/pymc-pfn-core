@@ -29,7 +29,6 @@ class FitConfig:
     warmup: int = 500
     weight_decay: float = 0.01
     grad_clip: float = 1.0
-    ema: float = 0.0  # decay of the weight average used for evaluation, 0 disables
     model: ModelConfig = field(default_factory=ModelConfig)
     norm_tasks: int = 1000  # prior draws used for normalisation statistics
     holdout_tasks: int = 256
@@ -133,11 +132,8 @@ def fit(
         optimizer, lambda s: _lr_factor(s, config)
     )
     step, best_loss, best_state = 0, float("inf"), copy.deepcopy(module.state_dict())
-    average = copy.deepcopy(module).requires_grad_(False) if config.ema > 0 else None
     if state is not None:
         module.load_state_dict(state["module"])
-        if average is not None:
-            average.load_state_dict(state["average"])
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
         step, best_loss, best_state = (
@@ -155,7 +151,6 @@ def fit(
         torch.save(
             {
                 "module": module.state_dict(),
-                "average": average.state_dict() if average is not None else None,
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
                 "step": step,
@@ -168,12 +163,11 @@ def fit(
 
     def evaluate(train_loss: float) -> None:
         nonlocal best_loss, best_state
-        evaluated = average if average is not None else module
-        loss = _holdout_loss(evaluated, holdout, config.seed)
+        loss = _holdout_loss(module, holdout, config.seed)
         if loss < best_loss:
             best_loss = loss
             best_state = {
-                k: v.detach().cpu().clone() for k, v in evaluated.state_dict().items()
+                k: v.detach().cpu().clone() for k, v in module.state_dict().items()
             }
         record = {
             "step": step,
@@ -219,12 +213,6 @@ def fit(
         optimizer.step()
         scheduler.step()
         step += 1
-        if average is not None:
-            # The decay ramps up, so early weights do not dominate the average.
-            decay = min(config.ema, (1 + step) / (10 + step))
-            with torch.no_grad():
-                for kept, new in zip(average.parameters(), module.parameters()):
-                    kept.lerp_(new, 1 - decay)
         running.append(float(loss.detach()))
         if step % config.eval_every == 0 or step == config.steps:
             evaluate(float(np.mean(running)))
