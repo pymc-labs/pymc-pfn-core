@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from pymc_pfn import scaling
 from pymc_pfn.model import (
     ModelConfig,
     PFNModule,
@@ -36,22 +37,47 @@ class Spec:
     prior_fingerprint: str | None = None
     format_version: int = FORMAT_VERSION
     extra: dict = field(default_factory=dict)
+    units: dict[str, str] = field(default_factory=dict)  # per-task scaling
+    inputs: list[str] = field(default_factory=list)  # observed plus derived inputs
+    scale_inputs: bool = True  # the network sees the per-task scales
+
+    def __post_init__(self) -> None:
+        if not self.inputs:
+            self.inputs = list(self.observed)
 
     @classmethod
     def from_batch(
-        cls, batch: TaskBatch, config: ModelConfig, fingerprint: str | None
+        cls,
+        batch: TaskBatch,
+        config: ModelConfig,
+        fingerprint: str | None,
+        units: dict[str, str] | None = None,
+        scale_inputs: bool = True,
     ) -> Spec:
-        """Normalisation statistics come from a sample of the prior."""
-        names = [*batch.observed, *batch.targets]
+        """Normalisation statistics come from a sample of the prior.
+
+        With ``units`` they describe the batch after per-task scaling.
+        """
+        units = dict(units or {})
+        scaling.validate(units, list(batch.observed), list(batch.targets), batch.kinds)
+        scaled, _ = scaling.apply(batch, units, batch.kinds, scale_inputs)
+        names = [*scaled.observed, *scaled.targets]
         return cls(
             observed=list(batch.observed),
             targets=list(batch.targets),
-            kinds={k: batch.kinds[k] for k in names},
-            mean={k: float(batch.active(k).mean()) for k in names},
-            std={k: max(float(batch.active(k).std()), STD_FLOOR) for k in names},
+            kinds={k: scaled.kinds[k] for k in names},
+            mean={k: float(scaled.active(k).mean()) for k in names},
+            std={k: max(float(scaled.active(k).std()), STD_FLOOR) for k in names},
             model=asdict(config),
             prior_fingerprint=fingerprint,
+            units=units,
+            inputs=list(scaled.observed),
+            scale_inputs=scale_inputs,
         )
+
+    def scale(self, batch: TaskBatch) -> tuple[TaskBatch, dict[str, np.ndarray]]:
+        """Per-task scaling of ``batch`` and the factor of every scaled variable."""
+        return scaling.apply(batch, self.units, self.kinds, self.scale_inputs)
 
 
 def default_device() -> str:
@@ -65,7 +91,14 @@ def default_device() -> str:
 def prepare(
     batch: TaskBatch, spec: Spec, device: str | torch.device
 ) -> dict[str, torch.Tensor]:
-    """Normalise a batch and lay it out on the token grid."""
+    """Scale and normalise a batch and lay it out on the token grid."""
+    return _prepare(spec.scale(batch)[0], spec, device)
+
+
+def _prepare(
+    batch: TaskBatch, spec: Spec, device: str | torch.device
+) -> dict[str, torch.Tensor]:
+    """``prepare`` for a batch that is already in per-task units."""
     r, e = batch.n_rows, batch.n_entities
 
     def grid(names: list[str], source: dict[str, np.ndarray]) -> tuple:
@@ -80,7 +113,7 @@ def prepare(
     mask = token_mask(
         torch.as_tensor(batch.row_mask), torch.as_tensor(batch.entity_mask)
     )
-    observed, present = grid(spec.observed, batch.observed)
+    observed, present = grid(spec.inputs, batch.observed)
     out = {
         "mask": mask,
         "observed": observed,
@@ -169,7 +202,7 @@ class PFN:
             )
         spec = Spec(**raw)
         module = PFNModule(
-            len(spec.observed), len(spec.targets), ModelConfig(**spec.model)
+            len(spec.inputs), len(spec.targets), ModelConfig(**spec.model)
         )
         module.load_state_dict(load_file(path / "model.safetensors"))
         return cls(module, spec, device)
@@ -207,13 +240,12 @@ class PFN:
         }
         for t0 in range(0, b, task_chunk):
             part = batch[t0 : t0 + task_chunk]
-            prep = prepare(
+            scaled, factors = spec.scale(
                 TaskBatch(
                     part.observed, {}, part.row_mask, part.entity_mask, part.kinds
-                ),
-                spec,
-                self.device,
+                )
             )
+            prep = _prepare(scaled, spec, self.device)
             n = len(part)
             encoded = self.module.encode(
                 prep["observed"], prep["observed_valid"], prep["mask"]
@@ -239,6 +271,8 @@ class PFN:
                 real = from_grid(valid, spec.targets, spec.kinds, r, e)
                 for k in spec.targets:
                     natural = values[k] * spec.std[k] + spec.mean[k]
+                    if k in factors:
+                        natural = natural * torch.as_tensor(factors[k][:, None])
                     out[k][t0 : t0 + n, d0 : d0 + c] = (natural * real[k]).numpy()
         return out
 

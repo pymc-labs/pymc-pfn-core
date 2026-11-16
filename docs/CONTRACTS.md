@@ -85,14 +85,40 @@ names, kinds, normalisation statistics, the model configuration, a
 fingerprint of the prior and `format_version`. Loading a bundle with another
 format version is an error.
 
-## 6. Sampling
+Per-task scaling is part of the spec: `units`, `scale_inputs` and `inputs`
+(the observed variables plus the derived scale inputs). A bundle without
+these fields loads as unscaled.
+
+## 6. Per-task scaling
+
+`FitConfig(units={"x": "x", "y": "y", "beta": "y/x"})` puts every task into
+its own units before the network sees it.
+
+- A unit is an observed variable or a ratio of two. Its scale is the
+  standard deviation over the real values of one task: one per task for row
+  and entity variables, one per entity for cell variables.
+- An observed variable whose unit is itself is centred and scaled. Any other
+  variable with a unit is divided by the scale and not shifted. A target
+  that moves when an observed variable is shifted, such as an intercept,
+  must not be given that unit.
+- Draws are returned in natural units. `PFN.sample` and `predict` take and
+  return the same arrays as without units.
+- With `scale_inputs=True`, the default, the network also receives
+  `log_scale[r]` and `center[r]` and loses no information. With
+  `scale_inputs=False` it is exactly equivariant to the declared rescalings
+  and blind to the absolute scale. That is correct only for a prior without
+  a preferred scale in these units.
+- Declaring units is a claim about the model. The library checks kinds and
+  names, not that the claim is true. `evaluate` shows whether it helped.
+
+## 7. Sampling
 
 `PFN.sample(batch)` returns one array per target with shape `(B, draws, ...)`
 in natural units, zero at padded positions. Noise is generated on the CPU from
 `seed`, so the same seed gives the same draws on every device up to
 floating-point differences.
 
-## 7. Evaluation
+## 8. Evaluation
 
 `evaluate(net, prior)` returns a `Report` and can write it as JSON. It draws
 fresh tasks with a seed stream that training never uses.
@@ -129,7 +155,7 @@ Rules:
 - A report without flags is not a proof. It says that the checks which were
   run did not fail.
 
-## 8. Imports
+## 9. Imports
 
 `import pymc_pfn` imports numpy only. PyMC is imported when a model is first
 built, torch when `fit`, `PFN`, `Posterior` or `ModelConfig` is first used.

@@ -28,20 +28,28 @@ ROOT = Path("runs/cc")
 REFERENCE_SEED = 31_337
 
 
-def model(n_obs: int, n_groups: int) -> pm.Model:
+UNITS = {"y": "y", "beta": "y"}  # x has a fixed scale in this prior
+
+
+def model(n_obs: int, n_groups: int, tau_scale: float = 1.0) -> pm.Model:
     coords = {"obs": range(n_obs), "group": range(n_groups)}
     with pm.Model(coords=coords) as m:
         x = pm.Normal("x", dims=("obs", "group"))
-        tau = pm.HalfNormal("tau")
+        tau = pm.HalfNormal("tau", tau_scale)
         beta = pm.Normal("beta", 0.0, tau, dims="group")
         sigma = pm.HalfNormal("sigma")
         pm.Normal("y", (x * beta).sum(axis=-1), sigma, dims="obs")
     return m
 
 
-def make_prior() -> pfn.Prior:
+def large_effects(n_obs: int, n_groups: int) -> pm.Model:
+    """Stress family: coefficients five times larger than in the prior."""
+    return model(n_obs, n_groups, tau_scale=5.0)
+
+
+def make_prior(build=model) -> pfn.Prior:
     return pfn.Prior(
-        model,
+        build,
         sizes={"n_obs": [16, 32, 64], "n_groups": range(2, 9)},
         observed=["x", "y"],
         targets=["beta"],
@@ -75,8 +83,11 @@ def reference(n_tasks: int) -> None:
     np.savez(ROOT / "reference_nuts.npz", mean=mean, sd=sd, crps=score)
 
 
-def train(name: str, steps: int, d_model: int) -> None:
+def train(name: str, steps: int, d_model: int, units: str) -> None:
+    """``units``: none, seen (scales are inputs) or free (scales are dropped)."""
     config = pfn.FitConfig(
+        units={} if units == "none" else UNITS,
+        scale_inputs=units != "free",
         steps=steps,
         batch_size=32,
         eval_every=max(steps // 10, 1),
@@ -98,7 +109,15 @@ def compare() -> None:
         draws = sample_grouped(net, tasks, draws=256, seed=0)["beta"]
         ratio = draws.std(axis=1) / nuts["sd"]
         shift = np.abs(draws.mean(axis=1) - nuts["mean"]) / nuts["sd"]
-        report = pfn.evaluate(net, make_prior(), n_tasks=200, sampler_grid=[], seed=1)
+        report = pfn.evaluate(
+            net,
+            make_prior(),
+            n_tasks=200,
+            sampler_grid=[],
+            seed=1,
+            stress={"large_effects": make_prior(large_effects)},
+        )
+        stressed = report.stress["large_effects"]["accuracy"]["network"]["beta"]
         rows[bundle.parent.name] = {
             "sd_ratio_narrow": float(np.median(ratio[narrow])),
             "sd_ratio_wide": float(np.median(ratio[wide])),
@@ -108,6 +127,8 @@ def compare() -> None:
             "rmse_in_prior": report.accuracy["network"]["beta"]["rmse"],
             "cov80_in_prior": report.accuracy["network"]["beta"]["cov80"],
             "cov80_by_width": report.conditional["beta"]["cov80"],
+            "rmse_large_effects": stressed["rmse"],
+            "cov80_large_effects": stressed["cov80"],
         }
         print(bundle.parent.name, json.dumps(rows[bundle.parent.name]), flush=True)
     print(f"{int(ok.any(axis=1).sum())} of {len(tasks)} reference tasks converged")
@@ -123,10 +144,11 @@ if __name__ == "__main__":
     training.add_argument("--name", required=True)
     training.add_argument("--steps", type=int, default=6000)
     training.add_argument("--d-model", type=int, default=64)
+    training.add_argument("--units", choices=["none", "seen", "free"], default="none")
     args = parser.parse_args()
     if args.command == "reference":
         reference(args.tasks)
     elif args.command == "train":
-        train(args.name, args.steps, args.d_model)
+        train(args.name, args.steps, args.d_model, args.units)
     else:
         compare()

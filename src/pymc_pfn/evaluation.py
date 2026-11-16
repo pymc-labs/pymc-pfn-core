@@ -659,8 +659,9 @@ def evaluate(
     for i, (name, family) in enumerate((stress or {}).items()):
         stress_batch, _, stress_accuracy = run(family, n_tasks, eval_seed + 100 + i)
         support = {}
-        for key in net.spec.observed:
-            z = (stress_batch.active(key) - net.spec.mean[key]) / net.spec.std[key]
+        as_seen = net.spec.scale(stress_batch)[0]  # what the network receives
+        for key in net.spec.inputs:
+            z = (as_seen.active(key) - net.spec.mean[key]) / net.spec.std[key]
             support[key] = {
                 "z_mean": float(z.mean()),
                 "z_sd": float(z.std()),
