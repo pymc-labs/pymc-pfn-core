@@ -45,8 +45,34 @@ widest third of the network's own posteriors.
 - Coverage by width detects the problem without NUTS: the narrowest third
   covers 87% to 90% instead of 80%. It is now part of every report.
 
+## Per-task scaling (2026-11-15)
+
+Same reference fits, same 6,000 steps, one seed. Units `{"y": "y",
+"beta": "y"}`: `y` is standardised per task and `beta` is expressed in units
+of the sd of `y`. Large effects is a stress family with coefficients five
+times larger than in the prior, 200 tasks.
+
+| Variant | sd ratio, narrow | sd ratio, wide | mean shift in NUTS sd | CRPS | 80% coverage by width | RMSE, large effects | 80% coverage, large effects |
+|---|---|---|---|---|---|---|---|
+| NUTS | 1 | 1 | 0 | 0.0554 | | | |
+| 6,000 steps, no scaling | 2.08 | 1.07 | 0.38 | 0.0636 | 86.9 / 80.6 / 79.1 | 2.30 | 69.1% |
+| 12,000 steps, no scaling | 1.76 | 1.06 | 0.26 | 0.0593 | 90.3 / 79.4 / 80.0 | 2.06 | 70.4% |
+| 6,000 steps, scaled, scales as inputs | 1.29 | 1.06 | 0.25 | 0.0604 | 85.0 / 78.4 / 80.9 | 0.52 | 84.4% |
+| 6,000 steps, scaled, scales dropped | 1.28 | 1.11 | 0.30 | 0.0602 | 82.5 / 75.3 / 80.0 | 0.53 | 85.7% |
+
+- Scaling moves the narrow ratio from 2.08 to 1.29 at equal training
+  length, more than doubling the training did. Narrow posteriors are still
+  about 30% too wide.
+- Outside the prior the error with larger coefficients falls by a factor of
+  four. OLS was not rerun on these tasks. On another sample of the same
+  family it scored 0.22, so the network is likely still behind it.
+- CRPS on the reference tasks improves from 0.0636 to 0.060, about the same
+  as the longer unscaled run. In-prior RMSE is unchanged (0.226 to 0.228).
+- Keeping or dropping the scale inputs makes no clear difference here. The
+  differences between the two are within what one seed can show.
+- Scaling and longer training were not combined.
+
 ## Not tested
 
-A wider network, per-task scaling of inputs and targets, a loss weighted
-toward narrow posteriors, more than one seed. The first two are the next
-candidates.
+A wider network, scaling combined with longer training, a loss weighted
+toward narrow posteriors, more than one seed.
