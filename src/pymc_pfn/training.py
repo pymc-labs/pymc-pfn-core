@@ -36,6 +36,9 @@ class FitConfig:
     seed: int = 0
     prefetch: int = 4
     device: str | None = None
+    # Per-task scaling, see pymc_pfn.scaling: {"y": "y", "beta": "y/x"}
+    units: dict[str, str] = field(default_factory=dict)
+    scale_inputs: bool = True  # False: exactly equivariant, absolute scale unseen
 
 
 def _lr_factor(step: int, config: FitConfig) -> float:
@@ -104,6 +107,8 @@ def fit(
             ),
             config.model,
             prior.fingerprint(),
+            config.units,
+            config.scale_inputs,
         )
         holdout_batch = prior.sample(
             config.holdout_tasks,
@@ -124,7 +129,7 @@ def fit(
         for i in range(0, len(order), config.batch_size)
     ]
 
-    module = PFNModule(len(spec.observed), len(spec.targets), config.model).to(device)
+    module = PFNModule(len(spec.inputs), len(spec.targets), config.model).to(device)
     optimizer = torch.optim.AdamW(
         module.parameters(), lr=config.lr, weight_decay=config.weight_decay
     )
@@ -145,7 +150,7 @@ def fit(
     def checkpoint() -> None:
         if out is None:
             return
-        best = PFNModule(len(spec.observed), len(spec.targets), config.model)
+        best = PFNModule(len(spec.inputs), len(spec.targets), config.model)
         best.load_state_dict(best_state)
         PFN(best, spec, "cpu").save(out / "bundle")
         torch.save(
@@ -218,6 +223,6 @@ def fit(
             evaluate(float(np.mean(running)))
             running = []
 
-    final = PFNModule(len(spec.observed), len(spec.targets), config.model)
+    final = PFNModule(len(spec.inputs), len(spec.targets), config.model)
     final.load_state_dict(best_state)
     return PFN(final, spec, device)

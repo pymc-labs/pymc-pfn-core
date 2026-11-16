@@ -79,6 +79,19 @@ source = pfn.Simulator(
 net = pfn.fit(source, pfn.FitConfig(steps=20_000), out="runs/demo")
 ```
 
+### Per-task scaling
+
+```python
+config = pfn.FitConfig(units={"x": "x", "y": "y", "beta": "y/x"})
+```
+
+Every task then enters the network in its own units: observed variables
+are standardised per task, cell variables per entity, and targets are
+divided by the declared scale. Draws come back in natural units. By default
+the network still sees the scales as inputs. `scale_inputs=False` drops
+them and makes the network exactly equivariant to rescaling. Details are in
+[docs/CONTRACTS.md](docs/CONTRACTS.md), section 6.
+
 What the PyMC route adds: kinds and axis order come from the model dims,
 `prefix_rows` saves compilations, and `evaluate(reference_tasks=...)` runs
 NUTS on the same model. A `Simulator` has no likelihood, so its report has
@@ -173,13 +186,15 @@ their order. Set `ModelConfig(ordered_rows=True)` for time series.
 
 Known limits:
 
-- Variables are standardised with fixed statistics from the prior. Data on a
-  very different scale than the prior is out of support. `evaluate` reports
-  the input scale of every stress family, `predict` does not warn yet.
+- Without `units`, variables are standardised with fixed statistics from the
+  prior, and data on a very different scale is out of support. The examples
+  below were run without `units`. `evaluate` reports the input scale of
+  every stress family, `predict` does not warn yet.
 - All observed variables are fully visible. There is no forecasting split.
 - Checkpoint selection uses the holdout flow loss, not a proper scoring rule.
-- Narrow posteriors come out too wide, see the experiment above. Longer
-  training helps slowly. Per-task scaling and a wider network are untested.
+- Narrow posteriors come out too wide, see the experiment above. Per-task
+  scaling reduces the excess from 2.1 to 1.3 times the NUTS sd in that
+  experiment (one seed) and does not remove it. A wider network is untested.
 - Task draws are reproducible only on a fresh `Prior`. Evaluate with a new
   `Prior` object, not the one used for training, to get the same tasks again.
   A `Simulator` does not have this limit.
