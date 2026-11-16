@@ -28,6 +28,7 @@ from pymc_pfn.task import TaskBatch
 if TYPE_CHECKING:
     from pymc_pfn.predict import PFN
     from pymc_pfn.prior import Prior
+    from pymc_pfn.source import TaskSource
 
 Arrays = dict[str, np.ndarray]
 Baseline = Callable[[TaskBatch], Arrays]
@@ -328,7 +329,9 @@ def _blind(batch: TaskBatch) -> TaskBatch:
     )
 
 
-def prior_only(prior: Prior, draws: int, seed: int, n_pool: int = 2000) -> Baseline:
+def prior_only(
+    prior: TaskSource, draws: int, seed: int, n_pool: int = 2000
+) -> Baseline:
     """Baseline that ignores the data: draws from the prior marginal of each target."""
     pool_batch = prior.sample(n_pool, seed=seed)
     pools = {name: pool_batch.active(name) for name in pool_batch.targets}
@@ -527,7 +530,7 @@ def _reference(
 
 def evaluate(
     net: PFN,
-    prior: Prior,
+    prior: TaskSource,
     *,
     n_tasks: int = 200,
     draws: int = 64,
@@ -535,7 +538,7 @@ def evaluate(
     steps: int = 10,
     method: str = "heun",
     baselines: Mapping[str, Baseline] | None = None,
-    stress: Mapping[str, Prior] | None = None,
+    stress: Mapping[str, TaskSource] | None = None,
     symmetries: Sequence[Symmetry] = (),
     sampler_grid: Sequence[tuple[str, int]] = DEFAULT_SAMPLER_GRID,
     sampler_tasks: int = 32,
@@ -547,9 +550,15 @@ def evaluate(
 
     ``baselines`` map a name to a function of a ``TaskBatch`` without targets.
     It returns point estimates ``(B, ...)`` or draws ``(B, D, ...)`` for any
-    subset of the targets. ``stress`` maps a name to another ``Prior`` with
-    the same variables. ``reference_tasks`` > 0 runs NUTS on that many tasks.
+    subset of the targets. ``stress`` maps a name to another task source with
+    the same variables. ``reference_tasks`` > 0 runs NUTS on that many tasks
+    and needs a ``Prior``, because NUTS runs on the PyMC model.
     """
+    if reference_tasks and not hasattr(prior, "build"):
+        raise TypeError(
+            "the NUTS reference needs a Prior built from a PyMC model, "
+            f"got {type(prior).__name__}. Set reference_tasks=0."
+        )
     kinds = net.spec.kinds
     eval_seed = seed + EVAL_SEED_OFFSET
     sample_kwargs = {"draws": draws, "seed": seed, "steps": steps, "method": method}
@@ -561,7 +570,9 @@ def evaluate(
     if net.spec.prior_fingerprint not in (None, prior.fingerprint()):
         flags.append("the prior differs from the one the network was trained on")
 
-    def run(family: Prior, n: int, family_seed: int) -> tuple[TaskBatch, Arrays, dict]:
+    def run(
+        family: TaskSource, n: int, family_seed: int
+    ) -> tuple[TaskBatch, Arrays, dict]:
         batch = family.sample(n, seed=family_seed)
         missing = [
             k for k in (*net.spec.observed, *net.spec.targets) if k not in batch.kinds

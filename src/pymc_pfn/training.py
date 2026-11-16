@@ -14,7 +14,7 @@ import torch
 
 from pymc_pfn.model import ModelConfig, PFNModule, flow_loss
 from pymc_pfn.predict import PFN, Spec, default_device, prepare
-from pymc_pfn.prior import Prior
+from pymc_pfn.source import TaskSource
 from pymc_pfn.task import TaskBatch
 
 HOLDOUT_SEED_OFFSET = 7_919_000
@@ -69,7 +69,7 @@ def _holdout_loss(module: PFNModule, holdout: list[dict], seed: int) -> float:
 
 
 def fit(
-    prior: Prior,
+    prior: TaskSource,
     config: FitConfig | None = None,
     out: str | Path | None = None,
     resume: bool = False,

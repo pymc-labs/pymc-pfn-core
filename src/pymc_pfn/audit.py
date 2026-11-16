@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from pymc_pfn.prior import Prior
+    from pymc_pfn.source import TaskSource
 
 
 class PriorAuditError(RuntimeError):
@@ -79,7 +79,7 @@ class AuditReport:
 
 
 def audit(
-    prior: Prior,
+    prior: TaskSource,
     n: int = 2000,
     seed: int = 0,
     min_prevalence: float = 0.01,
